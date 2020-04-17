@@ -92,7 +92,7 @@ export default (function create(defaults) {
 
 	/** @public */
 	redaxios.spread = function(fn) {
-		return function (results) {
+		return function(results) {
 			return fn.apply(this, results);
 		};
 	};
@@ -102,7 +102,8 @@ export default (function create(defaults) {
 			return opts.concat(overrides);
 		}
 		if (overrides && typeof overrides == 'object') {
-			let out = {}, i;
+			let out = {},
+				i;
 			if (opts) {
 				for (i in opts) {
 					let key = lowerCase ? i.toLowerCase() : i;
@@ -131,6 +132,34 @@ export default (function create(defaults) {
 			config = url;
 			url = config.url;
 		}
+
+		config.url = url;
+
+		const chain = [dispatchRequest];
+		let promise = Promise.resolve(config);
+
+		redaxios.interceptors.request.forEach((interceptor) => {
+			chain.unshift(interceptor.fulfilled, interceptor.rejected);
+		});
+
+		redaxios.interceptors.response.forEach((interceptor) => {
+			chain.push(interceptor.fulfilled, interceptor.rejected);
+		});
+
+		while (chain.length) {
+			promise = promise.then(chain.shift(), chain.shift());
+		}
+
+		return promise;
+	}
+
+	/**
+	 * dispatch request.
+	 * @private
+	 * @param {Options} [config]
+	 * @returns {Promise<Response>}
+	 */
+	function dispatchRequest (config) {
 		const options = deepMerge(defaults, config || {});
 		let data = options.data;
 
@@ -154,7 +183,7 @@ export default (function create(defaults) {
 			let parts = document.cookie.split(/ *[;=] */);
 			for (let i = 0; i < parts.length; i += 2) {
 				if (parts[i] == options.xsrfCookieName) {
-					customHeaders[options.xsrfHeaderName] = decodeURIComponent(parts[i+1]);
+					customHeaders[options.xsrfHeaderName] = decodeURIComponent(parts[i + 1]);
 					break;
 				}
 			}
@@ -168,11 +197,11 @@ export default (function create(defaults) {
 		const response = {};
 		response.config = config;
 
-		return fetch(url, {
+		return fetch(config.url, {
 			method: options.method,
 			body: data,
 			headers: deepMerge(options.headers, customHeaders, true)
-		}).then((res) => {
+		}).then(res => {
 			let i;
 			for (i in res) {
 				if (typeof res[i] != 'function') response[i] = res[i];
@@ -180,15 +209,37 @@ export default (function create(defaults) {
 			if (!(options.validateStatus ? options.validateStatus(res.status) : res.ok)) {
 				return Promise.reject(res);
 			}
-			const withData = options.responseType === 'stream'
-				? Promise.resolve(res.body)
-				: res[options.responseType || 'text']();
-			return withData.then((data) => {
+			const withData =
+				options.responseType === 'stream' ? Promise.resolve(res.body) : res[options.responseType || 'text']();
+			return withData.then(data => {
 				response.data = data;
 				return response;
 			});
 		});
 	}
+
+	function createInterceptors() {
+		const interceptors = [];
+		return {
+			use(fulfilled, rejected) {
+				interceptors.push({
+					fulfilled,
+					rejected
+				});
+				return interceptors.length - 1;
+			},
+			eject(id) {
+				if (interceptors[id]) {
+					interceptors[id] = null;
+				}
+			}
+		};
+	}
+
+	redaxios.interceptors = {
+		request: createInterceptors(),
+		response: createInterceptors()
+	};
 
 	redaxios.CancelToken = self.AbortController || Object;
 
